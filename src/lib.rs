@@ -598,7 +598,7 @@ impl CoreBPE {
         (tokens, completions)
     }
 
-    pub fn new<E, SE, NSE>(
+    pub fn new<E, SE>(
         encoder: E,
         special_tokens_encoder: SE,
         pattern: &str,
@@ -606,7 +606,6 @@ impl CoreBPE {
     where
         E: IntoIterator<Item = (Vec<u8>, Rank)>,
         SE: IntoIterator<Item = (String, Rank)>,
-        NSE: IntoIterator<Item = (String, (Rank, Rank))>,
     {
         Self::new_internal(
             HashMap::from_iter(encoder),
@@ -680,7 +679,7 @@ mod tests {
     use fancy_regex::Regex;
     use rustc_hash::FxHashMap as HashMap;
 
-    use crate::{Rank, byte_pair_split};
+    use crate::{CoreBPE, Rank, byte_pair_split};
 
     fn setup_ranks() -> HashMap<Vec<u8>, Rank> {
         HashMap::from_iter([(b"ab".to_vec(), 0), (b"cd".to_vec(), 1)])
@@ -698,5 +697,18 @@ mod tests {
         let ranks = setup_ranks();
         let res = byte_pair_split(b"abab", &ranks);
         assert_eq!(res, vec![b"ab", b"ab"]);
+    }
+
+    // No turbofish here on purpose: this only compiles if `CoreBPE::new` has no
+    // type parameters that cannot be inferred from its arguments. See #557.
+    #[test]
+    fn test_core_bpe_new_infers_type_parameters() {
+        let bpe = CoreBPE::new(
+            vec![(b"a".to_vec(), 0)],
+            vec![("<|endoftext|>".to_string(), 1)],
+            r".",
+        )
+        .unwrap();
+        assert_eq!(bpe.encode_with_special_tokens("a<|endoftext|>"), vec![0, 1]);
     }
 }
