@@ -68,6 +68,22 @@ enc.encode("hello world aaaaaaaaaaaa")
 ```
 
 
+## Offline use
+
+`tiktoken` downloads encoding files on first use and caches them in a local directory. To run
+without network access, point `TIKTOKEN_CACHE_DIR` at a directory containing the cached files and
+set `TIKTOKEN_OFFLINE=1`:
+
+```bash
+export TIKTOKEN_CACHE_DIR=~/.cache/tiktoken
+export TIKTOKEN_OFFLINE=1
+```
+
+Files may be stored either under their SHA-1 cache key or under their original file name (e.g.
+`cl100k_base.tiktoken`). When `TIKTOKEN_OFFLINE` is set, `tiktoken` never makes a network request;
+if a required file is missing from the cache it raises an error instead.
+
+
 ## Extending tiktoken
 
 You may wish to extend `tiktoken` to support new encodings. There are two ways to do this.

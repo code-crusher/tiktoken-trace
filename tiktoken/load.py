@@ -5,10 +5,31 @@ import hashlib
 import os
 
 
+class OfflineCacheMissError(FileNotFoundError, ValueError):
+    """Raised when offline mode is enabled and a file is not available locally.
+
+    Subclasses both ``FileNotFoundError`` (the file is missing from the cache) and
+    ``ValueError`` (the environment is misconfigured for offline use).
+    """
+
+
+def is_offline() -> bool:
+    value = os.environ.get("TIKTOKEN_OFFLINE", "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
 def read_file(blobpath: str) -> bytes:
     if "://" not in blobpath:
         with open(blobpath, "rb", buffering=0) as f:
             return f.read()
+
+    if is_offline():
+        cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR") or os.environ.get("DATA_GYM_CACHE_DIR")
+        location = f" (cache directory: {cache_dir!r})" if cache_dir else ""
+        raise OfflineCacheMissError(
+            f"TIKTOKEN_OFFLINE is set, so {blobpath!r} will not be downloaded{location}. "
+            f"Pre-populate the cache or unset TIKTOKEN_OFFLINE to allow network access."
+        )
 
     if blobpath.startswith(("http://", "https://")):
         # avoiding blobfile for public files helps avoid auth issues, like MFA prompts.
@@ -51,17 +72,28 @@ def read_file_cached(blobpath: str, expected_hash: str | None = None) -> bytes:
     cache_key = hashlib.sha1(blobpath.encode()).hexdigest()
 
     cache_path = os.path.join(cache_dir, cache_key)
-    if os.path.exists(cache_path):
-        with open(cache_path, "rb", buffering=0) as f:
+    # Prefer the SHA-1 entry, but also accept files named after the URL's
+    # basename, which is how users often pre-populate a cache for offline use.
+    cache_paths = [cache_path]
+    basename = os.path.basename(blobpath) if "://" in blobpath else ""
+    if basename:
+        cache_paths.append(os.path.join(cache_dir, basename))
+
+    for path in cache_paths:
+        if not os.path.exists(path):
+            continue
+        with open(path, "rb", buffering=0) as f:
             data = f.read()
         if expected_hash is None or check_hash(data, expected_hash):
             return data
 
         # the cached file does not match the hash, remove it and re-fetch
-        try:
-            os.remove(cache_path)
-        except OSError:
-            pass
+        # (but leave user-provided files named after the blobpath alone)
+        if path == cache_path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     contents = read_file(blobpath)
     if expected_hash and not check_hash(contents, expected_hash):
