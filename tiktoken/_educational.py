@@ -144,6 +144,13 @@ def bpe_train(
             for pair in zip(piece[:-1], piece[1:]):
                 stats[pair] += 1
 
+        if not stats:
+            # We've exhausted the training data before reaching vocab_size. This happens for
+            # small or low-resource corpora (e.g. a handful of sentences in a language with
+            # few tokens available to merge). Stop rather than calling max() on an empty
+            # Counter, and return the vocabulary we managed to learn.
+            break
+
         most_common_pair = max(stats, key=lambda x: stats[x])
         token_bytes = most_common_pair[0] + most_common_pair[1]
         token = len(ranks)

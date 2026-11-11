@@ -13,6 +13,21 @@ r50k_pat_str = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
 )
 
+# r50k_pat_str (and cl100k_base's pattern) only match \p{L}, so combining marks (\p{M}) always
+# start a new piece. Many scripts, including Bengali, Hindi, Tamil, Thai, Arabic and Hebrew, write
+# vowels, viramas and other diacritics as combining marks, so their words get split at every one of
+# them and BPE can never merge a letter with its vowel sign. This pattern matches \p{L} and \p{M}
+# together, which keeps such words in one piece. Use it when defining or training an encoding for
+# those scripts; see https://github.com/openai/tiktoken/issues/593.
+#
+# Note that this is only half the fix: the tokeniser also needs vocabulary entries for the script.
+# The legacy vocabularies have essentially none for Bengali, so switching the pattern alone does not
+# reduce token counts for them. o200k_base already uses a mark-aware pattern and has a Bengali
+# vocabulary, so it tokenises Bengali roughly 4x more cheaply than cl100k_base.
+multilingual_pat_str = (
+    r"""'(?:[sdmt]|ll|ve|re)| ?[\p{L}\p{M}]++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
+)
+
 
 def gpt2():
     mergeable_ranks = data_gym_to_mergeable_bpe_ranks(

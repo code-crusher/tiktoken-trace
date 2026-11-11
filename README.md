@@ -68,6 +68,37 @@ enc.encode("hello world aaaaaaaaaaaa")
 ```
 
 
+## Languages that use combining marks
+
+`tiktoken` splits text into pieces with a regex before applying BPE. The patterns used by the
+legacy encodings (`gpt2`, `r50k_base`, `p50k_base`, `p50k_edit` and `cl100k_base`) only match
+letters (`\p{L}`), so a combining mark (`\p{M}`) always starts a new piece. Many scripts — Bengali,
+Hindi, Tamil, Thai, Arabic, Hebrew and others — write vowels and other diacritics as combining
+marks, so their words are split at every one of them and BPE can never merge a letter with the
+vowel sign that follows it.
+
+If you are defining or training an encoding for one of those scripts, use
+`multilingual_pat_str` from `tiktoken_ext.openai_public` instead of the legacy pattern. It matches
+letters and combining marks together, so words stay in one piece:
+
+```python
+from tiktoken_ext.openai_public import multilingual_pat_str
+
+enc = tiktoken.Encoding(
+    name="my_bengali_encoding",
+    pat_str=multilingual_pat_str,
+    mergeable_ranks=my_mergeable_ranks,  # trained with the same pattern
+    special_tokens={"<|endoftext|>": 0},
+)
+```
+
+A mark-aware split rule is necessary but not sufficient: the vocabulary also needs entries for the
+script. `cl100k_base` contains no Bengali tokens at all, so it tokenises Bengali into individual
+bytes regardless of the split rule. `o200k_base` already uses a mark-aware pattern and has a
+Bengali vocabulary, so it is the encoding to use for Bengali today — it needs roughly a quarter of
+the tokens that `cl100k_base` needs for the same text.
+
+
 ## Extending tiktoken
 
 You may wish to extend `tiktoken` to support new encodings. There are two ways to do this.
