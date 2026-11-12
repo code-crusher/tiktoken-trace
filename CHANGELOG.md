@@ -2,6 +2,9 @@
 
 This is the changelog for the open source version of tiktoken.
 
+## [Unreleased]
+- Build manylinux riscv64 wheels
+
 ## [v0.14.0]
 - Build wheels for Python 3.15
 - Support looking up more GPT-5 series models
