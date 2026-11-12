@@ -18,12 +18,6 @@ MODEL_PREFIX_TO_ENCODING: dict[str, str] = {
     "gpt-3.5-turbo-": "cl100k_base",  # e.g, gpt-3.5-turbo-0301, -0401, etc.
     "gpt-35-turbo-": "cl100k_base",  # Azure deployment name
     "gpt-oss-": "o200k_harmony",
-    # fine-tuned
-    "ft:gpt-4o": "o200k_base",
-    "ft:gpt-4": "cl100k_base",
-    "ft:gpt-3.5-turbo": "cl100k_base",
-    "ft:davinci-002": "cl100k_base",
-    "ft:babbage-002": "cl100k_base",
 }
 
 MODEL_TO_ENCODING: dict[str, str] = {
@@ -90,14 +84,22 @@ def encoding_name_for_model(model_name: str) -> str:
 
     Raises a KeyError if the model name is not recognised.
     """
-    if model_name in MODEL_TO_ENCODING:
-        return MODEL_TO_ENCODING[model_name]
+    # Fine-tuned models are named "ft:<base model>:<org>:<suffix>:<id>" and use the same
+    # tokeniser as their base model, e.g. "ft:gpt-4.1-mini-2025-04-14:acme::abc" -> o200k_base.
+    # Resolving the base model first stops fine-tunes of newer models from matching a shorter,
+    # older prefix such as "gpt-4-".
+    base_model = model_name
+    if model_name.startswith("ft:"):
+        base_model = model_name[len("ft:") :].split(":", 1)[0]
+
+    if base_model in MODEL_TO_ENCODING:
+        return MODEL_TO_ENCODING[base_model]
 
     # Check if the model matches a known prefix
     # Prefix matching avoids needing library updates for every model version release
     # Note that this can match on non-existent models (e.g., gpt-3.5-turbo-FAKE)
     for model_prefix, encoding_name in MODEL_PREFIX_TO_ENCODING.items():
-        if model_name.startswith(model_prefix):
+        if base_model.startswith(model_prefix):
             return encoding_name
 
     raise KeyError(
