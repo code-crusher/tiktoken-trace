@@ -323,7 +323,7 @@ pub struct CoreBPE {
     decoder: HashMap<Rank, Vec<u8>>,
     special_tokens_decoder: HashMap<Rank, Vec<u8>>,
     regex_tls: Vec<Regex>,
-    special_regex_tls: Vec<Regex>,
+    special_regex_tls: Vec<Option<Regex>>,
     sorted_token_bytes: Vec<Vec<u8>>,
 }
 
@@ -335,8 +335,10 @@ impl CoreBPE {
         &self.regex_tls[hash_current_thread() % MAX_NUM_THREADS]
     }
 
-    fn _get_tl_special_regex(&self) -> &Regex {
-        &self.special_regex_tls[hash_current_thread() % MAX_NUM_THREADS]
+    fn _get_tl_special_regex(&self) -> Option<&Regex> {
+        let regex = &self.special_regex_tls[hash_current_thread() % MAX_NUM_THREADS];
+        // See the comment in new_internal for why this can be None
+        regex.as_ref()
     }
 
     /// Decodes tokens into a list of bytes.
@@ -388,7 +390,8 @@ impl CoreBPE {
             let mut start_find = start;
             loop {
                 // Find the next allowed special token, if any
-                next_special = special_regex.find_from_pos(text, start_find).unwrap();
+                next_special =
+                    special_regex.and_then(|r| r.find_from_pos(text, start_find).unwrap());
                 match next_special {
                     Some(m) => {
                         if allowed_special.contains(&text[m.start()..m.end()]) {
@@ -622,12 +625,17 @@ impl CoreBPE {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let regex = Regex::new(pattern)?;
 
-        let special_regex = {
+        let special_regex = if special_tokens_encoder.is_empty() {
+            // An empty alternation compiles to a regex that matches everywhere, which
+            // would make the scan for special tokens O(len(text)) regex calls.
+            // Encode without a special regex instead of with a useless one.
+            None
+        } else {
             let parts = special_tokens_encoder
                 .keys()
                 .map(|s| fancy_regex::escape(s))
                 .collect::<Vec<_>>();
-            Regex::new(&parts.join("|"))?
+            Some(Regex::new(&parts.join("|"))?)
         };
 
         let decoder: HashMap<Rank, Vec<u8>> =

@@ -54,6 +54,14 @@ class Encoding:
         # Contains on set is significantly faster than on dict_values
         self._special_token_values = set(self._special_tokens.values())
 
+        # Resolved special token set for allowed_special="all", or None until first needed.
+        # See _resolve_special_token_args.
+        self._all_special_tokens: frozenset[str] | None = None
+
+        # Cache of disallowed special token sets, keyed by the allowed ones.
+        # See _resolve_special_token_args.
+        self._disallowed_special_cache: dict[frozenset[str], frozenset[str]] = {}
+
         self._core_bpe = _tiktoken.CoreBPE(mergeable_ranks, special_tokens, pat_str)
 
     def __repr__(self) -> str:
@@ -113,13 +121,10 @@ class Encoding:
         [27, 91, 437, 1659, 5239, 91, 29]
         ```
         """
-        if allowed_special == "all":
-            allowed_special = self.special_tokens_set
-        if disallowed_special == "all":
-            disallowed_special = self.special_tokens_set - allowed_special
+        allowed_special, disallowed_special = self._resolve_special_token_args(
+            allowed_special, disallowed_special
+        )
         if disallowed_special:
-            if not isinstance(disallowed_special, frozenset):
-                disallowed_special = frozenset(disallowed_special)
             if match := _special_token_regex(disallowed_special).search(text):
                 raise_disallowed_special_token(match.group())
 
@@ -146,13 +151,10 @@ class Encoding:
 
         Avoids the overhead of copying the token buffer into a Python list.
         """
-        if allowed_special == "all":
-            allowed_special = self.special_tokens_set
-        if disallowed_special == "all":
-            disallowed_special = self.special_tokens_set - allowed_special
+        allowed_special, disallowed_special = self._resolve_special_token_args(
+            allowed_special, disallowed_special
+        )
         if disallowed_special:
-            if not isinstance(disallowed_special, frozenset):
-                disallowed_special = frozenset(disallowed_special)
             if match := _special_token_regex(disallowed_special).search(text):
                 raise_disallowed_special_token(match.group())
 
@@ -192,12 +194,9 @@ class Encoding:
         [[31373, 995], [11274, 16390, 995]]
         ```
         """
-        if allowed_special == "all":
-            allowed_special = self.special_tokens_set
-        if disallowed_special == "all":
-            disallowed_special = self.special_tokens_set - allowed_special
-        if not isinstance(disallowed_special, frozenset):
-            disallowed_special = frozenset(disallowed_special)
+        allowed_special, disallowed_special = self._resolve_special_token_args(
+            allowed_special, disallowed_special
+        )
 
         encoder = functools.partial(
             self.encode, allowed_special=allowed_special, disallowed_special=disallowed_special
@@ -230,13 +229,10 @@ class Encoding:
         >>> assert all(enc.decode_bytes(stable_tokens + seq).startswith(text.encode()) for seq in completions)
         ```
         """
-        if allowed_special == "all":
-            allowed_special = self.special_tokens_set
-        if disallowed_special == "all":
-            disallowed_special = self.special_tokens_set - allowed_special
+        allowed_special, disallowed_special = self._resolve_special_token_args(
+            allowed_special, disallowed_special
+        )
         if disallowed_special:
-            if not isinstance(disallowed_special, frozenset):
-                disallowed_special = frozenset(disallowed_special)
             if match := _special_token_regex(disallowed_special).search(text):
                 raise_disallowed_special_token(match.group())
 
@@ -364,6 +360,39 @@ class Encoding:
     @functools.cached_property
     def special_tokens_set(self) -> set[str]:
         return set(self._special_tokens.keys())
+
+    def _resolve_special_token_args(
+        self,
+        allowed_special: Literal["all"] | AbstractSet[str],
+        disallowed_special: Literal["all"] | Collection[str],
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """Resolves the allowed_special/disallowed_special arguments to frozensets.
+
+        This does the bookkeeping to figure out which special tokens are allowed and
+        disallowed, so that the encoding methods don't have to repeat it.
+        """
+        if allowed_special == "all":
+            if self._all_special_tokens is None:
+                self._all_special_tokens = frozenset(self._special_tokens)
+            allowed_special = self._all_special_tokens
+            if disallowed_special == "all":
+                # Nothing can be disallowed when everything is allowed
+                return allowed_special, frozenset()
+        elif not isinstance(allowed_special, frozenset):
+            allowed_special = frozenset(allowed_special)
+
+        if disallowed_special == "all":
+            # Computing `special_tokens_set - allowed_special` is O(n) in the number of
+            # special tokens, which can be very large. Cache the result, with a bound
+            # to avoid holding onto special token sets a caller no longer needs.
+            disallowed_special = self._disallowed_special_cache.get(allowed_special)
+            if disallowed_special is None:
+                disallowed_special = frozenset(self.special_tokens_set - allowed_special)
+                if len(self._disallowed_special_cache) < 128:
+                    self._disallowed_special_cache[allowed_special] = disallowed_special
+        elif not isinstance(disallowed_special, frozenset):
+            disallowed_special = frozenset(disallowed_special)
+        return allowed_special, disallowed_special
 
     def is_special_token(self, token: int) -> bool:
         assert isinstance(token, int)

@@ -2,6 +2,12 @@
 
 This is the changelog for the open source version of tiktoken.
 
+## Unreleased
+
+- Significantly speed up encoding for encodings with many special tokens, of which only
+  a few are allowed (#441)
+- Fix a slowdown when encoding with an encoding that has no special tokens
+
 ## [v0.14.0]
 - Build wheels for Python 3.15
 - Support looking up more GPT-5 series models
