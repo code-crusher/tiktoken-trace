@@ -2,6 +2,10 @@
 
 This is the changelog for the open source version of tiktoken.
 
+## Unreleased
+- Add `tiktoken.load.load_hf_tokenizer` to load HuggingFace byte level BPE `tokenizer.json` files
+  as `tiktoken.Encoding` objects ([#358](https://github.com/openai/tiktoken/issues/358))
+
 ## [v0.14.0]
 - Build wheels for Python 3.15
 - Support looking up more GPT-5 series models

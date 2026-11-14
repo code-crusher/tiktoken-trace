@@ -70,7 +70,22 @@ enc.encode("hello world aaaaaaaaaaaa")
 
 ## Extending tiktoken
 
-You may wish to extend `tiktoken` to support new encodings. There are two ways to do this.
+You may wish to extend `tiktoken` to support new encodings. There are three ways to do this.
+
+**Load a HuggingFace `tokenizer.json` file.**
+
+`tiktoken.load.load_hf_tokenizer` converts a byte level BPE tokenizer saved in HuggingFace's
+`tokenizer.json` format into a `tiktoken.Encoding`:
+```python
+from tiktoken.load import load_hf_tokenizer
+
+enc = load_hf_tokenizer("path/to/tokenizer.json")
+assert enc.decode(enc.encode("hello world")) == "hello world"
+```
+
+Tokenizers that need to rewrite the text (a normalizer, or SentencePiece's `Metaspace`) or that
+otherwise cannot be expressed as a byte level BPE are rejected with a `ValueError`, since converting
+them would silently produce different tokens.
 
 
 **Create your `Encoding` object exactly the way you want and simply pass it around.**
@@ -97,7 +112,7 @@ enc = tiktoken.Encoding(
 **Use the `tiktoken_ext` plugin mechanism to register your `Encoding` objects with `tiktoken`.**
 
 This is only useful if you need `tiktoken.get_encoding` to find your encoding, otherwise prefer
-option 1.
+the option above.
 
 To do this, you'll need to create a namespace package under `tiktoken_ext`.
 
