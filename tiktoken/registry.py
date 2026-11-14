@@ -94,3 +94,14 @@ def list_encoding_names() -> list[str]:
             _find_constructors()
             assert ENCODING_CONSTRUCTORS is not None
         return list(ENCODING_CONSTRUCTORS)
+
+
+def clear_registry() -> None:
+    """Removes all cached encodings from the registry.
+
+    Cached encodings are re-created lazily on the next call to `get_encoding`,
+    so this is safe to call at any time. This is useful to release the memory
+    held by encodings in long-running applications.
+    """
+    with _lock:
+        ENCODINGS.clear()

@@ -2,6 +2,23 @@ import subprocess
 import sys
 
 import tiktoken
+from tiktoken import registry
+
+
+def test_clear_registry():
+    enc = tiktoken.get_encoding("gpt2")
+    assert registry.ENCODINGS["gpt2"] is enc
+
+    tiktoken.clear_registry()
+    assert "gpt2" not in registry.ENCODINGS
+
+    # Clearing is idempotent and safe to call again.
+    tiktoken.clear_registry()
+
+    # The encoding is re-created lazily and still works.
+    new_enc = tiktoken.get_encoding("gpt2")
+    assert new_enc.encode("hello world") == [31373, 995]
+    assert registry.ENCODINGS["gpt2"] is new_enc
 
 
 def test_encoding_for_model():
