@@ -99,6 +99,12 @@ def test_hyp_encode_bytes(make_enc: Callable[[], tiktoken.Encoding], bytestring:
     assert enc.decode_bytes(enc._encode_bytes(bytestring)) == bytestring
 
 
+def _sorted_unstable(enc: tiktoken.Encoding, text: str) -> tuple[list[int], list[list[int]]]:
+    # The order of the completion sequences isn't guaranteed, so sort them before comparing.
+    stable_tokens, completions = enc.encode_with_unstable(text)
+    return stable_tokens, sorted(completions)
+
+
 def test_encode_surrogate_pairs():
     enc = tiktoken.get_encoding("cl100k_base")
 
@@ -108,6 +114,10 @@ def test_encode_surrogate_pairs():
 
     # lone surrogate just gets replaced
     assert enc.encode("\ud83d") == enc.encode("�")
+
+    # encode_with_unstable handles surrogate pairs and lone surrogates the same way
+    assert _sorted_unstable(enc, "\ud83d\udc4d") == _sorted_unstable(enc, "👍")
+    assert _sorted_unstable(enc, "\ud83d") == _sorted_unstable(enc, "�")
 
 
 @pytest.mark.parametrize("make_enc", ENCODING_FACTORIES)
