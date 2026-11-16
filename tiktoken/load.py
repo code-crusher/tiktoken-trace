@@ -107,7 +107,12 @@ def data_gym_to_mergeable_bpe_ranks(
 
     # vocab_bpe contains the merges along with associated ranks
     vocab_bpe_contents = read_file_cached(vocab_bpe_file, vocab_bpe_hash).decode()
-    bpe_merges = [tuple(merge_str.split()) for merge_str in vocab_bpe_contents.split("\n")[1:-1]]
+    lines = vocab_bpe_contents.split("\n")
+    # the original GPT-2 vocab.bpe starts with a "#version: ..." header line; other tokenizers
+    # (e.g. Qwen) ship a headerless file, so only skip the first line if it's a comment
+    if lines and lines[0].startswith("#"):
+        lines = lines[1:]
+    bpe_merges = [tuple(merge_str.split()) for merge_str in lines if merge_str.strip()]
 
     def decode_data_gym(value: str) -> bytes:
         return bytes(data_gym_byte_to_byte[b] for b in value)
@@ -117,11 +122,13 @@ def data_gym_to_mergeable_bpe_ranks(
     bpe_ranks = {bytes([b]): i for i, b in enumerate(rank_to_intbyte)}
     del rank_to_intbyte
 
-    # add the merged tokens
     n = len(bpe_ranks)
+    mergeable_tokens = []
     for first, second in bpe_merges:
-        bpe_ranks[decode_data_gym(first) + decode_data_gym(second)] = n
+        token = decode_data_gym(first) + decode_data_gym(second)
+        bpe_ranks[token] = n
         n += 1
+        mergeable_tokens.append(token)
 
     import json
 
@@ -139,7 +146,26 @@ def data_gym_to_mergeable_bpe_ranks(
             if len(k) == 1:
                 bpe_ranks[k] = encoder_json_loaded[k]
 
-    assert bpe_ranks == encoder_json_loaded
+    if bpe_ranks != encoder_json_loaded:
+        # Some tokenizers (e.g. Qwen3.5) ship an encoder.json whose token ids do not match the
+        # ranks implied by the merge order: the encoder assigns ids to tokens in blocks and
+        # leaves gaps of unused tokens that no merge produces. Since the encoder's ids are what
+        # the model's embedding table is indexed by, the encoder file is authoritative; keep it
+        # as-is, and use the merges only to learn which tokens exist and their relative order.
+        # The ids of the tokens produced by the merges must be strictly increasing in merge
+        # order, otherwise the encoder and the merges are inconsistent and bpe breaks.
+        if set(bpe_ranks) - set(encoder_json_loaded):
+            raise ValueError(
+                f"Encoder file {encoder_json_file} is missing tokens produced by the merges"
+            )
+        # the ids of the merged tokens must be strictly increasing in merge order, otherwise
+        # the encoder and the merges are inconsistent and the bpe ranks would be wrong
+        merged_ranks = [encoder_json_loaded[t] for t in mergeable_tokens]
+        if len(set(merged_ranks)) != len(merged_ranks) or merged_ranks != sorted(merged_ranks):
+            raise ValueError(f"Encoder file {encoder_json_file} is not consistent with the merges")
+        # the encoder may contain extra tokens that no merge produces (e.g. unused tokens
+        # reserved during training); keep them, since their ids index the embedding table
+        bpe_ranks = dict(encoder_json_loaded)
 
     return bpe_ranks
 
