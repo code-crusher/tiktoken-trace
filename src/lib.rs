@@ -1,6 +1,5 @@
 use std::collections::HashSet;
-use std::num::NonZeroU64;
-use std::thread;
+use std::sync::{Arc, Mutex};
 
 use fancy_regex::Regex;
 #[cfg(feature = "python")]
@@ -234,8 +233,16 @@ pub fn byte_pair_split<'a>(piece: &'a [u8], ranks: &HashMap<Vec<u8>, Rank>) -> V
 // some mutable scratch space inside of `regex`. This absolutely kills performance. When using plain
 // old `regex`, we don't hit this, because `find_iter` has a different code path.
 // Related: https://github.com/rust-lang/regex/blob/master/PERFORMANCE.md
-// Anyway, the way we get around this is with having a (mostly) thread local clone of the regex for
-// each thread.
+// Anyway, the way we get around this is with having a separate regex for each thread.
+//
+// Note that `fancy_regex::Regex::clone` does *not* achieve that: a clone shares the compiled
+// program, and for the patterns used here that program owns the scratch pool, so a vector of clones
+// is still one shared pool and all but one thread serialise on it. That caused the multi-second
+// tail stalls reported in https://github.com/openai/tiktoken/issues/530. `RegexPool` below
+// therefore keeps a free list of *independently compiled* regexes and hands one to each caller for
+// the duration of an encode call. A free list rather than thread-local storage because
+// `ThreadPoolExecutor` creates fresh threads on every batch call, so a thread-local cache would
+// recompile a regex (several milliseconds) on every call.
 //
 // Threading
 // =========
@@ -258,21 +265,6 @@ pub fn byte_pair_split<'a>(piece: &'a [u8], ranks: &HashMap<Vec<u8>, Rank>) -> V
 // We use FxHashMap instead of the standard HashMap. This is maybe like a 5-10% win?
 // The current implementation ends up doing a lot of hashing of bytes. In theory, this could be made
 // to be hashing of two-tuples of ints, which looks like it may also be a couple percent faster.
-
-struct FakeThreadId(NonZeroU64);
-
-fn hash_current_thread() -> usize {
-    // It's easier to use unsafe than to use nightly. Rust has this nice u64 thread id counter
-    // that works great for our use case of avoiding collisions in our array. Unfortunately,
-    // it's private. However, there are only so many ways you can layout a u64, so just transmute
-    // https://github.com/rust-lang/rust/issues/67939
-    const _: [u8; 8] = [0; std::mem::size_of::<std::thread::ThreadId>()];
-    const _: [u8; 8] = [0; std::mem::size_of::<FakeThreadId>()];
-    let x = unsafe {
-        std::mem::transmute::<std::thread::ThreadId, FakeThreadId>(thread::current().id()).0
-    };
-    u64::from(x) as usize
-}
 
 #[derive(Debug, Clone)]
 pub struct DecodeKeyError {
@@ -313,7 +305,89 @@ impl std::fmt::Display for EncodeError {
 
 impl std::error::Error for EncodeError {}
 
-const MAX_NUM_THREADS: usize = 128;
+/// A pool of independently compiled regexes for a single pattern.
+///
+/// Cloning a `fancy_regex::Regex` is not enough to give a thread private scratch space:
+/// `Regex::clone` shares the compiled program, and for patterns that need fancy features (like the
+/// `(?!\S)` lookahead in `cl100k_base`/`o200k_base`) that program owns the scratch-buffer pool that
+/// `find_iter` mutates. A vector of clones is therefore a *single* pool: one thread gets its
+/// lock-free fast path and every other thread serialises on the pool's mutexes. That is what
+/// produced the multi-second tail stalls in `encode_ordinary_batch`
+/// (https://github.com/openai/tiktoken/issues/530).
+///
+/// Compiling a separate regex per thread avoids the shared pool, but `ThreadPoolExecutor` creates
+/// fresh threads on every batch call, so a purely thread-local cache would recompile on every
+/// call. A compile costs a few milliseconds, which is more than a small batch costs to encode.
+/// Instead, compiled regexes are checked out of this pool for the duration of a call and returned
+/// afterwards, so the cost is paid once per concurrent thread rather than once per call. Memory is
+/// bounded by peak concurrency.
+struct RegexPool {
+    pattern: Arc<str>,
+    /// Independently compiled regexes, shared with clones of this pool.
+    free: Arc<Mutex<Vec<Regex>>>,
+}
+
+impl RegexPool {
+    fn new(pattern: &str) -> Self {
+        Self {
+            pattern: Arc::from(pattern),
+            free: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Checks out a regex for exclusive use until the returned guard is dropped.
+    fn get(&self) -> RegexGuard<'_> {
+        // Take the lock only to move a value out of the vector; compiling under the lock would
+        // serialise every thread that needs a fresh regex.
+        let existing = lock(&self.free).pop();
+        // The pattern was validated in `new_internal`, so this cannot fail.
+        let regex = existing
+            .unwrap_or_else(|| Regex::new(&self.pattern).expect("validated at construction"));
+        RegexGuard {
+            pool: self,
+            regex: Some(regex),
+        }
+    }
+}
+
+/// Borrows a regex from a [`RegexPool`] and returns it when dropped.
+struct RegexGuard<'a> {
+    pool: &'a RegexPool,
+    regex: Option<Regex>,
+}
+
+impl std::ops::Deref for RegexGuard<'_> {
+    type Target = Regex;
+
+    fn deref(&self) -> &Regex {
+        self.regex.as_ref().expect("guard is only emptied on drop")
+    }
+}
+
+impl Drop for RegexGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(regex) = self.regex.take() {
+            lock(&self.pool.free).push(regex);
+        }
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    // A panic while the lock is held cannot leave the vector inconsistent, so recover rather
+    // than propagating the panic to unrelated encode calls.
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl Clone for RegexPool {
+    fn clone(&self) -> Self {
+        // Sharing the free list is fine: it holds *independent* regexes, so threads still check
+        // out distinct ones. Clones therefore do not duplicate compiled regexes.
+        Self {
+            pattern: Arc::clone(&self.pattern),
+            free: Arc::clone(&self.free),
+        }
+    }
+}
 
 #[cfg_attr(feature = "python", pyclass(frozen))]
 #[derive(Clone)]
@@ -322,21 +396,19 @@ pub struct CoreBPE {
     special_tokens_encoder: HashMap<String, Rank>,
     decoder: HashMap<Rank, Vec<u8>>,
     special_tokens_decoder: HashMap<Rank, Vec<u8>>,
-    regex_tls: Vec<Regex>,
-    special_regex_tls: Vec<Regex>,
+    regex_pool: RegexPool,
+    special_regex_pool: RegexPool,
     sorted_token_bytes: Vec<Vec<u8>>,
 }
 
 impl CoreBPE {
-    fn _get_tl_regex(&self) -> &Regex {
+    fn _get_tl_regex(&self) -> RegexGuard<'_> {
         // See performance notes above for what this is about
-        // It's also a little janky, please make a better version of it!
-        // However, it's nice that this doesn't leak memory to short-lived threads
-        &self.regex_tls[hash_current_thread() % MAX_NUM_THREADS]
+        self.regex_pool.get()
     }
 
-    fn _get_tl_special_regex(&self) -> &Regex {
-        &self.special_regex_tls[hash_current_thread() % MAX_NUM_THREADS]
+    fn _get_tl_special_regex(&self) -> RegexGuard<'_> {
+        self.special_regex_pool.get()
     }
 
     /// Decodes tokens into a list of bytes.
@@ -620,15 +692,16 @@ impl CoreBPE {
         special_tokens_encoder: HashMap<String, Rank>,
         pattern: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let regex = Regex::new(pattern)?;
+        // Validate the patterns up front so bad input fails at construction rather than on the
+        // first encode. The per-thread regexes are compiled lazily by `RegexPool`.
+        Regex::new(pattern)?;
 
-        let special_regex = {
-            let parts = special_tokens_encoder
-                .keys()
-                .map(|s| fancy_regex::escape(s))
-                .collect::<Vec<_>>();
-            Regex::new(&parts.join("|"))?
-        };
+        let special_pattern = special_tokens_encoder
+            .keys()
+            .map(|s| fancy_regex::escape(s))
+            .collect::<Vec<_>>()
+            .join("|");
+        Regex::new(&special_pattern)?;
 
         let decoder: HashMap<Rank, Vec<u8>> =
             encoder.iter().map(|(k, v)| (*v, k.clone())).collect();
@@ -654,10 +727,8 @@ impl CoreBPE {
             special_tokens_encoder,
             decoder,
             special_tokens_decoder,
-            regex_tls: (0..MAX_NUM_THREADS).map(|_| regex.clone()).collect(),
-            special_regex_tls: (0..MAX_NUM_THREADS)
-                .map(|_| special_regex.clone())
-                .collect(),
+            regex_pool: RegexPool::new(pattern),
+            special_regex_pool: RegexPool::new(&special_pattern),
             sorted_token_bytes,
         })
     }

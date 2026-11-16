@@ -253,6 +253,46 @@ def test_batch_encode(make_enc: Callable[[], tiktoken.Encoding]):
 
 
 @pytest.mark.parametrize("make_enc", ENCODING_FACTORIES)
+def test_batch_encode_from_many_threads(make_enc: Callable[[], tiktoken.Encoding]):
+    """Every thread must get its own regex scratch space.
+
+    `fancy_regex::Regex::clone` shares the compiled program, which owns the scratch buffers that
+    `find_iter` mutates, so a thread pool built out of clones serialises on one shared pool. See
+    the perf notes in src/lib.rs. This mostly guards correctness: the batches must match
+    single-threaded encoding regardless of which thread or slot does the work.
+    """
+    enc = make_enc()
+    batch = [
+        "hello world",
+        "こんにちは世界。これはテストです。😀",
+        "def foo(x):\n    return x + 1  # comment\n" * 20,
+        "  leading and trailing  ",
+        "",
+        "1234567890" * 50,
+    ]
+    expected = [enc.encode_ordinary(text) for text in batch]
+
+    # Repeat so the pool's lazily-compiled slots are exercised, and use more threads than docs so
+    # slots are filled from several different threads.
+    for _ in range(3):
+        assert enc.encode_ordinary_batch(batch * 4, num_threads=16) == expected * 4
+
+
+@pytest.mark.parametrize("make_enc", ENCODING_FACTORIES)
+def test_batch_encode_after_pickle_roundtrip(make_enc: Callable[[], tiktoken.Encoding]):
+    """A cloned/reconstructed encoding must not share the original's regex scratch pools."""
+    import pickle
+
+    enc = make_enc()
+    restored = pickle.loads(pickle.dumps(enc))
+    text = "hello world, こんにちは"
+    expected = [enc.encode_ordinary(text)] * 8
+
+    assert restored.encode_ordinary_batch([text] * 8, num_threads=8) == expected
+    assert enc.encode_ordinary_batch([text] * 8, num_threads=8) == expected
+
+
+@pytest.mark.parametrize("make_enc", ENCODING_FACTORIES)
 @hypothesis.given(batch=st.lists(st.text()))
 @hypothesis.settings(deadline=None, max_examples=MAX_EXAMPLES)
 def test_hyp_batch_roundtrip(make_enc: Callable[[], tiktoken.Encoding], batch):
