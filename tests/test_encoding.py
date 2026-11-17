@@ -152,7 +152,9 @@ def test_basic_roundtrip(make_enc):
 def test_hyp_roundtrip(make_enc: Callable[[], tiktoken.Encoding], text):
     enc = make_enc()
 
-    assert text == enc.decode(enc.encode(text))
+    # `disallowed_special=()`: arbitrary text may contain special tokens like <|fim_prefix|>,
+    # which `encode` otherwise rejects with a ValueError.
+    assert text == enc.decode(enc.encode(text, disallowed_special=()))
 
 
 @pytest.mark.parametrize("make_enc", ENCODING_FACTORIES)
@@ -262,3 +264,30 @@ def test_hyp_batch_roundtrip(make_enc: Callable[[], tiktoken.Encoding], batch):
     assert encoded == [enc.encode(t, allowed_special="all") for t in batch]
     decoded = enc.decode_batch(encoded)
     assert decoded == batch
+
+
+# ====================
+# Buffer protocol
+# ====================
+
+
+def test_encode_to_tiktoken_buffer():
+    import math
+
+    enc = tiktoken.get_encoding("cl100k_base")
+    cases = [
+        ("hello world", set(), {}),
+        ("", set(), {}),
+        ("hello <|endoftext|>", {"<|endoftext|>"}, {"allowed_special": "all"}),
+    ]
+    for text, allowed_special, encode_kwargs in cases:
+        buf = enc._core_bpe.encode_to_tiktoken_buffer(text, allowed_special)
+        mv = memoryview(buf)
+        expected = enc.encode(text, **encode_kwargs)
+        assert mv.format == "I"
+        assert mv.ndim == 1
+        assert mv.itemsize == 4
+        assert mv.shape == (len(expected),)
+        assert math.prod(mv.shape) * mv.itemsize == mv.nbytes == len(expected) * mv.itemsize
+        assert mv.tolist() == expected
+        assert mv.readonly

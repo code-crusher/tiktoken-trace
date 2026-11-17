@@ -221,7 +221,9 @@ impl TiktokenBuffer {
             };
             view_ref.ndim = 1;
             view_ref.shape = if (flags & pyo3::ffi::PyBUF_ND) == pyo3::ffi::PyBUF_ND {
-                &mut view_ref.len
+                // shape must be num_tokens (not the byte length in view.len); it is
+                // heap-allocated here and freed in __releasebuffer__.
+                Box::into_raw(Box::new(data.len() as pyo3::ffi::Py_ssize_t))
             } else {
                 std::ptr::null_mut()
             };
@@ -243,6 +245,9 @@ impl TiktokenBuffer {
             let view_ref = &mut *view;
             if !view_ref.format.is_null() {
                 std::mem::drop(std::ffi::CString::from_raw(view_ref.format));
+            }
+            if !view_ref.shape.is_null() {
+                drop(Box::from_raw(view_ref.shape));
             }
         }
     }
