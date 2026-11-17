@@ -142,7 +142,13 @@ def o200k_harmony():
         "<|reserved_200010|>": 200010,
         "<|reserved_200011|>": 200011,
         "<|call|>": 200012,
-    } | {f"<|reserved_{i}|>": i for i in range(200013, 201088)}
+    }
+    # Skip ids that are already assigned to another special token, e.g. <|endofprompt|>.
+    special_tokens |= {
+        f"<|reserved_{i}|>": i
+        for i in range(200013, 201088)
+        if i not in special_tokens.values()
+    }
     return {
         "name": name,
         "pat_str": pat_str,
