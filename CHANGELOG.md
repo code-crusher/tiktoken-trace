@@ -2,6 +2,10 @@
 
 This is the changelog for the open source version of tiktoken.
 
+## Unreleased
+- Restore manylinux2014/manylinux_2_17 wheels, so tiktoken installs without a
+  Rust compiler on older Linux systems such as Amazon Linux 2 (#456)
+
 ## [v0.14.0]
 - Build wheels for Python 3.15
 - Support looking up more GPT-5 series models

@@ -25,6 +25,11 @@ build-verbosity = 1
 
 linux.before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
 linux.environment = { PATH = "$PATH:$HOME/.cargo/bin" }
+# build against the oldest supported manylinux image so the resulting wheels
+# are tagged manylinux2014/manylinux_2_17 and install on older glibc systems
+# (e.g. Amazon Linux 2); cibuildwheel v3+ defaults to manylinux_2_28 (#456)
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
 macos.before-all = "rustup target add aarch64-apple-darwin x86_64-apple-darwin"
 macos.environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
 

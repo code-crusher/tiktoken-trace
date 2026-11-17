@@ -1,3 +1,4 @@
+import pathlib
 import subprocess
 import sys
 
@@ -28,3 +29,35 @@ import sys
 assert "blobfile" not in sys.modules
 """
     subprocess.check_call([sys.executable, "-c", prog])
+
+
+def test_linux_wheel_is_manylinux2014_compatible():
+    # Wheels built by cibuildwheel must install on manylinux2014 systems
+    # (glibc 2.17), e.g. Amazon Linux 2. This runs against the installed
+    # wheel during cibuildwheel's test phase. See issue #456.
+    if not sys.platform.startswith("linux"):
+        return
+
+    # look for the dist-info next to the imported tiktoken package, so we
+    # inspect the wheel actually under test rather than some other tiktoken
+    # installation on the system
+    package_parent = pathlib.Path(tiktoken.__file__).parent.parent
+    dist_info_dirs = list(package_parent.glob("tiktoken-*.dist-info"))
+
+    # an editable or source-tree install has no wheel under test
+    if not dist_info_dirs:
+        return
+
+    wheel_text = (dist_info_dirs[0] / "WHEEL").read_text()
+    tags = [
+        line.split(": ", 1)[1].strip()
+        for line in wheel_text.splitlines()
+        if line.startswith("Tag:")
+    ]
+    manylinux_tags = [tag for tag in tags if "manylinux" in tag]
+    if not manylinux_tags or all("musllinux" in tag for tag in manylinux_tags):
+        return
+
+    assert any(
+        "manylinux2014" in tag or "manylinux_2_17" in tag for tag in manylinux_tags
+    ), f"wheel is not manylinux2014-compatible: {tags}"
