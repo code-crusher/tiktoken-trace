@@ -357,19 +357,27 @@ impl CoreBPE {
         Ok(ret)
     }
 
-    pub fn encode_ordinary(&self, text: &str) -> Vec<Rank> {
+    pub fn encode_ordinary(&self, text: &str) -> Result<Vec<Rank>, EncodeError> {
         // This is the core of the encoding logic; the other functions in here
         // just make things complicated :-)
         let regex = self._get_tl_regex();
         let mut ret = vec![];
-        for mat in regex.find_iter(text) {
-            let piece = mat.unwrap().as_str().as_bytes();
+        for mat_res in regex.find_iter(text) {
+            let mat = match mat_res {
+                Ok(m) => m,
+                Err(e) => {
+                    return Err(EncodeError {
+                        message: format!("Regex error while tokenizing: {e}"),
+                    });
+                }
+            };
+            let piece = mat.as_str().as_bytes();
             match self.encoder.get(piece) {
                 Some(token) => ret.push(*token),
                 None => ret.extend(&byte_pair_encode(piece, &self.encoder)),
             }
         }
-        ret
+        Ok(ret)
     }
 
     pub fn encode(
@@ -388,7 +396,14 @@ impl CoreBPE {
             let mut start_find = start;
             loop {
                 // Find the next allowed special token, if any
-                next_special = special_regex.find_from_pos(text, start_find).unwrap();
+                next_special = match special_regex.find_from_pos(text, start_find) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return Err(EncodeError {
+                            message: format!("Regex error while tokenizing special tokens: {e}"),
+                        });
+                    }
+                };
                 match next_special {
                     Some(m) => {
                         if allowed_special.contains(&text[m.start()..m.end()]) {
@@ -484,12 +499,12 @@ impl CoreBPE {
         &self,
         text: &str,
         allowed_special: &HashSet<&str>,
-    ) -> (Vec<Rank>, HashSet<Vec<Rank>>) {
-        let (tokens, last_piece_token_len) = self.encode(text, allowed_special).unwrap();
+    ) -> Result<(Vec<Rank>, HashSet<Vec<Rank>>), EncodeError> {
+        let (tokens, last_piece_token_len) = self.encode(text, allowed_special)?;
         if last_piece_token_len == 0 {
             // If last_piece_token_len is zero, the last token was a special token and we have
             // no unstable bytes
-            return (tokens, HashSet::new());
+            return Ok((tokens, HashSet::new()));
         }
         let (mut tokens, last_piece_token_len) =
             self._increase_last_piece_token_len(tokens, last_piece_token_len);
@@ -505,7 +520,7 @@ impl CoreBPE {
 
         let mut completions = HashSet::new();
         if unstable_bytes.is_empty() {
-            return (tokens, completions);
+            return Ok((tokens, completions));
         }
 
         // This is the easy bit. Just find all single tokens that start with unstable_bytes
@@ -544,7 +559,10 @@ impl CoreBPE {
                     // So convert to UTF-8 and do regex splitting.
                     // E.g. with cl100k_base "  !" gets split to " " + " !",
                     // but byte_pair_encode("  !") != byte_pair_encode(" ")
-                    Ok(s) => self.encode_ordinary(s),
+                    // These retokenised completions are candidates; a regex error here just
+                    // means we compute a less complete set of candidates, so it's safe to
+                    // fall back to no completions for this possibility.
+                    Ok(s) => self.encode_ordinary(s).unwrap_or_default(),
 
                     // Technically, whether or not this arm is correct depends on whether there
                     // would be a regex split before the UTF-8 truncation point.
@@ -595,7 +613,7 @@ impl CoreBPE {
             }
         }
 
-        (tokens, completions)
+        Ok((tokens, completions))
     }
 
     pub fn new<E, SE, NSE>(
@@ -669,9 +687,9 @@ impl CoreBPE {
             .collect()
     }
 
-    pub fn encode_with_special_tokens(&self, text: &str) -> Vec<Rank> {
+    pub fn encode_with_special_tokens(&self, text: &str) -> Result<Vec<Rank>, EncodeError> {
         let allowed_special = self.special_tokens();
-        self.encode(text, &allowed_special).unwrap().0
+        Ok(self.encode(text, &allowed_special)?.0)
     }
 }
 

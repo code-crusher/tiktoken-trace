@@ -27,8 +27,11 @@ impl CoreBPE {
     // ====================
 
     #[pyo3(name = "encode_ordinary")]
-    fn py_encode_ordinary(&self, py: Python, text: &str) -> Vec<Rank> {
-        py.detach(|| self.encode_ordinary(text))
+    fn py_encode_ordinary(&self, py: Python, text: &str) -> PyResult<Vec<Rank>> {
+        py.detach(|| {
+            self.encode_ordinary(text)
+                .map_err(|e| PyErr::new::<exceptions::PyValueError, _>(e.message))
+        })
     }
 
     #[pyo3(name = "encode")]
@@ -69,17 +72,20 @@ impl CoreBPE {
         buffer.into_py_any(py)
     }
 
-    fn _encode_bytes(&self, py: Python, bytes: &[u8]) -> Vec<Rank> {
+    fn _encode_bytes(&self, py: Python, bytes: &[u8]) -> PyResult<Vec<Rank>> {
         py.detach(|| {
             match std::str::from_utf8(bytes) {
                 // Straightforward case
-                Ok(text) => self.encode_ordinary(text),
+                Ok(text) => self
+                    .encode_ordinary(text)
+                    .map_err(|e| PyErr::new::<exceptions::PyValueError, _>(e.message)),
                 // Oops, don't actually have UTF-8. But we need to do the regex splitting in
                 // Unicode space, so we make our best guess at where we would have splits
                 Err(e) => {
                     let text = unsafe { std::str::from_utf8_unchecked(&bytes[..e.valid_up_to()]) };
-                    let (tokens, last_piece_token_len) =
-                        self.encode(text, &HashSet::new()).unwrap();
+                    let (tokens, last_piece_token_len) = self
+                        .encode(text, &HashSet::new())
+                        .map_err(|e| PyErr::new::<exceptions::PyValueError, _>(e.message))?;
                     let (mut tokens, last_piece_token_len) =
                         self._increase_last_piece_token_len(tokens, last_piece_token_len);
 
@@ -92,7 +98,9 @@ impl CoreBPE {
                         // split between the valid UTF-8 and the invalid bytes.
                         unstable_bytes = self
                             .decode_bytes(&tokens[tokens.len() - last_piece_token_len..])
-                            .unwrap();
+                            .map_err(|e| {
+                                PyErr::new::<exceptions::PyValueError, _>(e.to_string())
+                            })?;
                         unstable_bytes.extend_from_slice(&bytes[e.valid_up_to()..]);
 
                         tokens.truncate(tokens.len() - last_piece_token_len);
@@ -108,7 +116,7 @@ impl CoreBPE {
                             }
                         }
                     }
-                    tokens
+                    Ok(tokens)
                 }
             }
         })
@@ -125,7 +133,8 @@ impl CoreBPE {
             let allowed_special: HashSet<&str> =
                 allowed_special.iter().map(|s| s.as_ref()).collect();
             self._encode_unstable_native(text, &allowed_special)
-        });
+                .map_err(|e| PyErr::new::<exceptions::PyValueError, _>(e.message))
+        })?;
         let py_completions = PyList::new(py, completions.into_iter())?;
         Ok((tokens, py_completions.into()))
     }

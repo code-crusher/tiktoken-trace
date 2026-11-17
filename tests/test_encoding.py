@@ -124,6 +124,28 @@ def test_catastrophically_repetitive(make_enc: Callable[[], tiktoken.Encoding]):
         assert big_value == enc.decode(enc.encode(big_value))
 
 
+# Runs of whitespace longer than fancy-regex's internal backtracking limit
+# (~1M) used to escape as an uncatchable PanicException (or, on older
+# versions, RuntimeError(StackOverflow)) from every encode entry point.
+# They should raise a catchable ValueError instead.
+# See https://github.com/openai/tiktoken/issues/400
+@pytest.mark.parametrize("make_enc", ENCODING_FACTORIES)
+def test_pathological_whitespace_run_raises_catchably(make_enc: Callable[[], tiktoken.Encoding]):
+    enc = make_enc()
+    # A leading non-whitespace char forces the trailing \s+(?!\S) branch of
+    # the pattern to match the whole run, which is what exhausts the stack.
+    text = "a" + " " * 2_000_000 + "b"
+
+    with pytest.raises(ValueError, match="Regex error while tokenizing"):
+        enc.encode(text, disallowed_special=())
+    with pytest.raises(ValueError, match="Regex error while tokenizing"):
+        enc.encode_ordinary(text)
+    with pytest.raises(ValueError, match="Regex error while tokenizing"):
+        enc.encode_with_unstable(text, disallowed_special=())
+    with pytest.raises(ValueError, match="Regex error while tokenizing"):
+        enc._encode_bytes(text.encode())
+
+
 # ====================
 # Roundtrip
 # ====================

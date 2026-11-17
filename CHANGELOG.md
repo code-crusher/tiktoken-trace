@@ -2,6 +2,11 @@
 
 This is the changelog for the open source version of tiktoken.
 
+## Unreleased
+- Fix panics on inputs that exhaust the regex engine's backtracking limit (e.g. runs of
+  more than ~1M consecutive whitespace characters). All encode entry points now raise a
+  catchable `ValueError` instead of a `PanicException`/`RuntimeError`
+
 ## [v0.14.0]
 - Build wheels for Python 3.15
 - Support looking up more GPT-5 series models
