@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import sys
+import warnings
 
 
 def read_file(blobpath: str) -> bytes:
@@ -32,6 +34,18 @@ def check_hash(data: bytes, expected_hash: str) -> bool:
     return actual_hash == expected_hash
 
 
+def default_cache_dir() -> str:
+    # a per-user cache dir avoids cache poisoning attacks on shared machines,
+    # where another local user could pre-create the old shared /tmp/data-gym-cache
+    # directory and place a malicious cache file in it, see issue #500
+    if sys.platform == "win32":
+        import tempfile
+
+        return os.path.join(tempfile.gettempdir(), "tiktoken")
+    else:
+        return os.path.join(os.path.expanduser("~"), ".cache", "tiktoken")
+
+
 def read_file_cached(blobpath: str, expected_hash: str | None = None) -> bytes:
     user_specified_cache = True
     if "TIKTOKEN_CACHE_DIR" in os.environ:
@@ -39,9 +53,7 @@ def read_file_cached(blobpath: str, expected_hash: str | None = None) -> bytes:
     elif "DATA_GYM_CACHE_DIR" in os.environ:
         cache_dir = os.environ["DATA_GYM_CACHE_DIR"]
     else:
-        import tempfile
-
-        cache_dir = os.path.join(tempfile.gettempdir(), "data-gym-cache")
+        cache_dir = default_cache_dir()
         user_specified_cache = False
 
     if cache_dir == "":
@@ -54,7 +66,15 @@ def read_file_cached(blobpath: str, expected_hash: str | None = None) -> bytes:
     if os.path.exists(cache_path):
         with open(cache_path, "rb", buffering=0) as f:
             data = f.read()
-        if expected_hash is None or check_hash(data, expected_hash):
+        if expected_hash is None:
+            warnings.warn(
+                f"Using cached file {cache_path} without hash verification, as no expected "
+                "hash was provided. A tampered cache file could silently corrupt your data. "
+                "Pass `expected_hash` to enable verification.",
+                stacklevel=2,
+            )
+            return data
+        if check_hash(data, expected_hash):
             return data
 
         # the cached file does not match the hash, remove it and re-fetch
