@@ -13,7 +13,10 @@ setup(
             features=["python"],
         )
     ],
-    package_data={"tiktoken": ["py.typed"]},
-    packages=["tiktoken", "tiktoken_ext"],
+    package_data={
+        "tiktoken": ["py.typed"],
+        "tiktoken._pyinstaller": ["hooks/*.py"],
+    },
+    packages=["tiktoken", "tiktoken._pyinstaller", "tiktoken_ext"],
     zip_safe=False,
 )

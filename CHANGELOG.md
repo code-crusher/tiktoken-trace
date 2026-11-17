@@ -2,6 +2,9 @@
 
 This is the changelog for the open source version of tiktoken.
 
+## [Unreleased]
+- Add a PyInstaller hook so that the `tiktoken_ext` encoding plugins are collected automatically
+
 ## [v0.14.0]
 - Build wheels for Python 3.15
 - Support looking up more GPT-5 series models
