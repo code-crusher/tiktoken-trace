@@ -2,7 +2,31 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import os
+
+# Without a timeout, a stalled connection blocks forever. `tiktoken.get_encoding`
+# constructs encodings while holding a lock, so that would block unrelated lookups
+# too. See issue #413.
+DEFAULT_HTTP_TIMEOUT = 30
+
+
+def _http_timeout() -> float:
+    """Returns the timeout (in seconds) to use for HTTP requests.
+
+    The default can be overridden with the TIKTOKEN_HTTP_TIMEOUT environment variable.
+    Invalid values (non-numeric, non-positive, or non-finite) are ignored.
+    """
+    raw_timeout = os.environ.get("TIKTOKEN_HTTP_TIMEOUT")
+    if raw_timeout is None:
+        return DEFAULT_HTTP_TIMEOUT
+    try:
+        timeout = float(raw_timeout)
+    except ValueError:
+        return DEFAULT_HTTP_TIMEOUT
+    if not math.isfinite(timeout) or timeout <= 0:
+        return DEFAULT_HTTP_TIMEOUT
+    return timeout
 
 
 def read_file(blobpath: str) -> bytes:
@@ -14,7 +38,7 @@ def read_file(blobpath: str) -> bytes:
         # avoiding blobfile for public files helps avoid auth issues, like MFA prompts.
         import requests
 
-        resp = requests.get(blobpath)
+        resp = requests.get(blobpath, timeout=_http_timeout())
         resp.raise_for_status()
         return resp.content
 

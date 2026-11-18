@@ -33,6 +33,13 @@ Performance measured on 1GB of text using the GPT-2 tokeniser, using `GPT2Tokeni
 `tokenizers==0.13.2`, `transformers==4.24.0` and `tiktoken==0.2.0`.
 
 
+## Network access
+
+The first time an encoding is used, `tiktoken` downloads its vocabulary from the internet and
+caches it locally (see `TIKTOKEN_CACHE_DIR` in `tiktoken/load.py`). Downloads time out after 30
+seconds by default; set `TIKTOKEN_HTTP_TIMEOUT` to a positive number of seconds to change this.
+
+
 ## Getting help
 
 Please post questions in the [issue tracker](https://github.com/openai/tiktoken/issues).

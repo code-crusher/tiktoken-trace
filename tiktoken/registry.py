@@ -15,6 +15,18 @@ _lock = threading.RLock()
 ENCODINGS: dict[str, Encoding] = {}
 ENCODING_CONSTRUCTORS: dict[str, Callable[[], dict[str, Any]]] | None = None
 
+# One lock per encoding, so that constructing an encoding (which may involve downloading
+# its vocabulary) doesn't block lookups of unrelated encodings. See issue #413.
+_encoding_locks: dict[str, threading.RLock] = {}
+
+
+def _encoding_lock(encoding_name: str) -> threading.RLock:
+    # Must be called while holding _lock
+    lock = _encoding_locks.get(encoding_name)
+    if lock is None:
+        lock = _encoding_locks[encoding_name] = threading.RLock()
+    return lock
+
 
 @functools.lru_cache
 def _available_plugin_modules() -> Sequence[str]:
@@ -83,6 +95,15 @@ def get_encoding(encoding_name: str) -> Encoding:
             )
 
         constructor = ENCODING_CONSTRUCTORS[encoding_name]
+        encoding_lock = _encoding_lock(encoding_name)
+
+    # Construct the encoding without holding the global lock, since the constructor may
+    # download files from the network. The per-encoding lock avoids constructing the same
+    # encoding twice concurrently, while leaving other encodings unblocked.
+    with encoding_lock:
+        if encoding_name in ENCODINGS:
+            return ENCODINGS[encoding_name]
+
         enc = Encoding(**constructor())
         ENCODINGS[encoding_name] = enc
         return enc
