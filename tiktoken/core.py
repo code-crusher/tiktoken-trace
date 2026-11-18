@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import functools
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, AbstractSet, Collection, Literal, NoReturn, Sequence
 
 from tiktoken import _tiktoken
 
 if TYPE_CHECKING:
-    import re
-
     import numpy as np
     import numpy.typing as npt
 
@@ -395,7 +394,12 @@ class Encoding:
     def _encode_only_native_bpe(self, text: str) -> list[int]:
         """Encodes a string into tokens, but do regex splitting in Python."""
         # We need specifically `regex` in order to compile pat_str due to e.g. \p
-        import regex
+        try:
+            import regex
+        except ImportError as e:
+            raise ImportError(
+                "regex is not installed. Please install it by running `pip install tiktoken[regex]`."
+            ) from e
 
         _unused_pat = regex.compile(self._pat_str)
         ret = []
@@ -430,10 +434,9 @@ class Encoding:
 
 @functools.lru_cache(maxsize=128)
 def _special_token_regex(tokens: frozenset[str]) -> re.Pattern[str]:
-    try:
-        import regex as re
-    except ImportError:
-        import re
+    # Special tokens are matched as literal strings, so the stdlib `re` module suffices.
+    # (The `regex` package is an optional dependency; it is not required to compile
+    # arbitrary `pat_str`s with e.g. `\p{...}` classes, since that happens in Rust.)
     inner = "|".join(re.escape(token) for token in tokens)
     return re.compile(f"({inner})")
 

@@ -55,7 +55,12 @@ properties:
    again in different contexts, it helps models generalise and better understand grammar.
 
 `tiktoken` contains an educational submodule that is friendlier if you want to learn more about
-the details of BPE, including code that helps visualise the BPE procedure:
+the details of BPE, including code that helps visualise the BPE procedure.
+
+Note that the educational module requires the `regex` package, which is not installed by default
+(it does not have prebuilt packages on all platforms tiktoken supports). Install it with
+`pip install tiktoken[regex]`.
+
 ```python
 from tiktoken._educational import *
 

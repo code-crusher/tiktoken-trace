@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import collections
 
-import regex
+try:
+    import regex
+except ImportError as e:
+    raise ImportError(
+        "regex is not installed. Please install it by running `pip install tiktoken[regex]`."
+    ) from e
 
 import tiktoken
 
